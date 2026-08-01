@@ -1,0 +1,10 @@
+streamlit
+folium
+streamlit-folium
+plotly
+numpy
+pandas
+scipy
+mysql-connector-python
+osmnx
+networkx
