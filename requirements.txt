@@ -8,3 +8,4 @@ scipy
 mysql-connector-python
 osmnx
 networkx
+scikit-learn
