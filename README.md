@@ -15,6 +15,24 @@ An end-to-end route optimization system that finds **near-optimal garbage collec
 
 🔗 **Live Demo:** [https://zero-waste-logistics.streamlit.app](https://zero-waste-logistics.streamlit.app)
 
+<!-- 📸 Add a screenshot of the dashboard here once you have one, e.g.: -->
+<!-- ![Dashboard Screenshot](screenshot.png) -->
+
+---
+
+## 🎯 Problem Statement
+
+Waste collection trucks in most cities run the same fixed route every single day, regardless of which locations actually have waste piling up, and regardless of whether that route is even close to optimal. There's no dynamic response to real demand, and no consideration of actual road distance versus a straight-line guess — leading to wasted fuel, wasted time, and inefficient service.
+
+## 💡 Solution
+
+Zero Waste Logistics builds a small end-to-end system that:
+- pulls real pickup-location data for a city from OpenStreetMap
+- figures out which locations are closest to the truck's *current* position (not a fixed daily list)
+- calculates the shortest route using **real road distances** the truck can actually drive, not a straight line through buildings
+- optimizes the order of stops with an **Ant Colony Optimization** algorithm instead of a naive nearest-first ordering
+- presents all of this in a live, interactive dashboard anyone can explore
+
 ---
 
 ## 🧠 What's Under the Hood
