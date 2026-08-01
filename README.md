@@ -15,8 +15,18 @@ An end-to-end route optimization system that finds **near-optimal garbage collec
 
 🔗 **Live Demo:** [https://zero-waste-logistics.streamlit.app](https://zero-waste-logistics.streamlit.app)
 
+<<<<<<< HEAD
 <!-- 📸 Add a screenshot of the dashboard here once you have one, e.g.: -->
 <!-- ![Dashboard Screenshot](screenshot.png) -->
+=======
+<div align="center">
+
+![Dashboard Overview](screenshot1.png)
+
+![Optimized Route on Map](screenshot2.png)
+
+</div>
+>>>>>>> a5352e04862f1c641361d2dd2bfdbc566a3e19f8
 
 ---
 
