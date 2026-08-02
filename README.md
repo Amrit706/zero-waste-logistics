@@ -9,12 +9,11 @@
 ![Optimization](https://img.shields.io/badge/Optimization-Ant%20Colony-orange?style=flat-square)
 ![MySQL](https://img.shields.io/badge/-MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white)
 
-An end-to-end route optimization system that finds **near-optimal garbage collection routes** across a city using **real road-network distances** (not straight-line estimates) and an **Ant Colony Optimization** algorithm built from scratch — going beyond a fixed daily route into something that actually adapts to where the truck is and what's on the map.
+An end-to-end route optimization system that finds **near-optimal garbage collection routes** across a city using **real road-network distances** (not straight-line estimates) and an **Ant Colony Optimization** algorithm built from scratch — going beyond a fixed daily route into something that actually adapts to where the truck is and what's on the map. It also connects, in real time, to a live cloud-hosted database rather than only running on bundled demo data.
 
 **Business Impact:** Cut total route distance by roughly **5–20%** versus a naive nearest-neighbor ordering (varies by run/hyperparameters), while switching the underlying distance calculation from straight-line estimates to **real drivable road distances** via Dijkstra's shortest-path algorithm — meaning the optimized route is one a truck could actually drive, not just a theoretical shortcut through buildings.
 
 🔗 **Live Demo:** [https://zero-waste-logistics.streamlit.app](https://zero-waste-logistics.streamlit.app)
-
 
 ---
 <div align="center">
@@ -38,6 +37,7 @@ Zero Waste Logistics builds a small end-to-end system that:
 - figures out which locations are closest to the truck's *current* position (not a fixed daily list)
 - calculates the shortest route using **real road distances** the truck can actually drive, not a straight line through buildings
 - optimizes the order of stops with an **Ant Colony Optimization** algorithm instead of a naive nearest-first ordering
+- connects live to a real, cloud-hosted database rather than only running on mock data
 - presents all of this in a live, interactive dashboard anyone can explore
 
 ---
@@ -47,8 +47,8 @@ Zero Waste Logistics builds a small end-to-end system that:
 | Stage | What Happens | Tech |
 |---|---|---|
 | 🗺️ Data Extraction | Restaurants, hospitals & colleges pulled from OpenStreetMap | `osmnx` |
-| 🗄️ Storage | Cleaned location data persisted to a relational database | `MySQL` |
-| 🎲 Demand Simulation | Synthetic historical pickup-request patterns (dinner rushes, hospital frequency, etc.) | `NumPy` / `random` |
+| 🗄️ Storage | Location + historical demand data persisted to a MySQL database, hosted live in the cloud | `MySQL` (Aiven) |
+| 🎲 Demand Data | **Real** aggregated pickup history when connected live; synthetic patterns as a fallback for the offline demo dataset | `SQL` / `NumPy` |
 | 📍 Nearest-Neighbor Search | Instantly finds the closest pending pickups to the truck | `SciPy KD-Tree` |
 | 🛣️ Real Road Distance | Locations snapped onto the actual drivable street graph, shortest paths computed with **Dijkstra's algorithm** | `NetworkX` + `osmnx` |
 | 🐜 Route Optimization | Ant Colony Optimization, built from scratch — pheromone trails + distance heuristics converge on a short route | Custom Python |
@@ -59,19 +59,22 @@ Zero Waste Logistics builds a small end-to-end system that:
 ## ✨ Features
 
 - 🚚 **Dynamic truck location** — simulated in real time, or pulled live from GPS telemetry, never hardcoded
+- 🔌 **Live production database** — connects in real time to a cloud-hosted MySQL instance (Aiven), pulling actual location and demand-history data — not a mock or a local-only demo
+- 📊 **Real demand analytics** — when connected live, waste-volume and request-count KPIs are computed from an actual stored `historical_requests` table via SQL aggregation, not regenerated randomly on each run
 - 🛰️ **Two distance modes** — instant straight-line estimate, or real road-network driving distance (Dijkstra on the actual street graph)
 - 🐜 **Tunable ACO engine** — adjust ants, iterations, evaporation rate, and pheromone/distance weighting live from the sidebar
 - 🗺️ **Live interactive map** — optimized route rendered stop-by-stop with amenity-specific markers
 - 📈 **Optimizer analytics** — convergence curve + naive-route vs. optimized-route comparison
-- 🔌 **MySQL-ready** — flip a toggle to pull real production data instead of the bundled demo dataset
-- 🛡️ **Resilient by design** — gracefully falls back to demo data if a DB connection isn't available, instead of crashing
+- 🔐 **Secrets-based auth** — live database credentials are never typed by a visitor or stored in the repo, managed entirely through Streamlit's Secrets manager
+- 🛡️ **Resilient by design** — gracefully falls back to demo data if a live DB connection isn't available, instead of crashing
+- ⏰ **Always-on demo** — a scheduled GitHub Actions workflow keeps the deployed app pinged and awake, so it's never asleep when someone clicks the link
 
 ---
 
 ## 🏗️ Pipeline
 
 ```
-OpenStreetMap ──▶ MySQL ──▶ KD-Tree (nearest pickups)
+OpenStreetMap ──▶ MySQL (Aiven, cloud-hosted) ──▶ KD-Tree (nearest pickups)
                                     │
                                     ▼
                   Road Network Graph + Dijkstra (real distances)
@@ -91,9 +94,10 @@ OpenStreetMap ──▶ MySQL ──▶ KD-Tree (nearest pickups)
 - **Spatial data structures** — KD-Trees for fast geographic nearest-neighbor lookup
 - **Combinatorial optimization** — Ant Colony Optimization implemented from first principles (not a library call), including pheromone evaporation/deposit and the alpha/beta exploration-vs-exploitation tradeoff
 - **Real-world geospatial engineering** — the jump from naive straight-line distance to actual road-network shortest paths, which is the difference between a toy demo and something realistic
-- **Data engineering fundamentals** — schema design, MySQL integration, and catching subtle type issues (e.g. `DECIMAL` columns returning as Python `Decimal` instead of `float`, which silently breaks downstream math if uncaught)
-- **Production-minded habits** — no hardcoded secrets, no hardcoded "truck location," graceful fallbacks instead of crashes
-- **Full-stack deployment** — from a Jupyter notebook prototype to a live, publicly deployed app on Streamlit Community Cloud, version-controlled on GitHub
+- **Live data engineering** — a real cloud-hosted MySQL database (Aiven), SSL-secured connections, and SQL aggregation queries against actual stored history, not just a schema that sits unused
+- **Secrets management** — credentials handled via Streamlit's Secrets manager rather than hardcoded or typed by end users, with a documented rotation after an earlier accidental commit (see note below)
+- **Production-minded habits** — no hardcoded "truck location," graceful fallbacks instead of crashes, connection timeouts instead of indefinite hangs
+- **Full-stack deployment** — from a Jupyter notebook prototype to a live, publicly deployed app on Streamlit Community Cloud, version-controlled on GitHub, with a scheduled uptime workflow
 
 ---
 
@@ -106,7 +110,10 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Runs instantly on the bundled demo dataset — no database setup required. Flip the sidebar toggle to **"Connect to MySQL"** if you want to point it at your own `location` table.
+Runs instantly on the bundled demo dataset — no database setup required. The sidebar offers three data sources:
+- **Demo dataset** — works immediately, no setup
+- **Live database (real-time)** — connects automatically using credentials from Streamlit Secrets (only available if you've configured your own `.streamlit/secrets.toml`)
+- **Connect to your own MySQL** — point it at any MySQL database with a matching schema
 
 ---
 
@@ -118,6 +125,8 @@ zero-waste-logistics/
 ├── main_updated.ipynb              # Full pipeline, built & tested step by step
 ├── requirements.txt                # Dependencies
 ├── prayagraj_drive_network.graphml # Cached road network (instant load, no re-download)
+├── .github/workflows/keep_awake.yml# Scheduled ping to keep the deployed app awake
+├── .streamlit/secrets.toml         # Local-only DB credentials (gitignored, never committed)
 └── README.md
 ```
 
@@ -133,13 +142,15 @@ zero-waste-logistics/
 ![SciPy](https://img.shields.io/badge/SciPy-8CAAE6?style=flat-square&logo=scipy&logoColor=white)
 ![Plotly](https://img.shields.io/badge/Plotly-3F4F75?style=flat-square&logo=plotly&logoColor=white)
 
-**OSMnx** · **NetworkX** (Dijkstra's algorithm) · **Folium** · **Ant Colony Optimization** (custom implementation)
+**OSMnx** · **NetworkX** (Dijkstra's algorithm) · **Folium** · **Aiven** (managed cloud MySQL) · **Ant Colony Optimization** (custom implementation)
 
 ---
 
-## 📌 Note on the Data
+## 📌 Notes on the Data
 
-Location data (restaurants, hospitals, colleges) is real, pulled live from OpenStreetMap. Historical pickup-request volume is **synthetically simulated** — I didn't have access to real sensor/request logs, so demand patterns are generated with realistic assumptions (e.g. hospitals get picked up more frequently than colleges, restaurants spike during dinner hours).
+- **Location data** (restaurants, hospitals, colleges) is real, pulled live from OpenStreetMap.
+- **Demand data** is real when connected via "Live database (real-time)" — it's aggregated with a SQL query against an actual `historical_requests` table. The **Demo dataset** mode, by contrast, generates synthetic demand patterns on the fly (since the demo locations have no matching real request history), using realistic assumptions (e.g. hospitals get picked up more frequently than colleges, restaurants spike during dinner hours).
+- **Limitations:** the free-tier cloud database (1 GB RAM/storage) may briefly pause after periods of inactivity, adding a few seconds to the first live-database connection. A scheduled GitHub Actions workflow keeps the Streamlit app itself awake, though it does not separately ping the database.
 
 ---
 
@@ -150,4 +161,3 @@ Location data (restaurants, hospitals, colleges) is real, pulled live from OpenS
 🔗 **[View the live app](https://zero-waste-logistics.streamlit.app)**
 
 </div>
-
