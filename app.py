@@ -106,10 +106,25 @@ def load_demo_locations(n_extra: int = 14, seed: int = 42) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["node_id", "name", "latitude", "longitude", "amenity_type"])
 
 
-@st.cache_data(show_spinner=False)
-def load_mysql_locations(host, user, password, database) -> pd.DataFrame:
+@st.cache_data(show_spinner="Connecting to the live database...")
+def load_mysql_locations(host, user, password, database, port=3306, ssl_ca=None) -> pd.DataFrame:
     import mysql.connector
-    conn = mysql.connector.connect(host=host, user=user, password=password, database=database)
+    import tempfile
+
+    connect_kwargs = dict(
+        host=host, port=port, user=user, password=password, database=database,
+        connect_timeout=15,  # fail with a clear error instead of hanging forever
+    )
+    if ssl_ca:
+        # Aiven (and most managed MySQL hosts) require SSL. mysql-connector-python
+        # needs the CA cert as a file path, so write the cert content out temporarily.
+        ca_file = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+        ca_file.write(ssl_ca)
+        ca_file.close()
+        connect_kwargs["ssl_ca"] = ca_file.name
+        connect_kwargs["ssl_verify_cert"] = True
+
+    conn = mysql.connector.connect(**connect_kwargs)
     # noinspection SqlNoDataSourceInspection
     df = pd.read_sql("SELECT node_id, name, latitude, longitude, amenity_type FROM location", conn)
     conn.close()
@@ -118,6 +133,43 @@ def load_mysql_locations(host, user, password, database) -> pd.DataFrame:
     # -- same bug you hit in the notebook. Cast once, here, at the source.
     df["latitude"] = df["latitude"].astype(float)
     df["longitude"] = df["longitude"].astype(float)
+    return df
+
+
+@st.cache_data(show_spinner="Loading real demand history...")
+def load_mysql_demand(host, user, password, database, port=3306, ssl_ca=None) -> pd.DataFrame:
+    """Pulls REAL aggregated demand from the historical_requests table you populated
+    in MySQL, instead of the synthetic simulate_demand() generator. Falls back to
+    simulate_demand() at the call site if this table doesn't exist or the query fails."""
+    import mysql.connector
+    import tempfile
+
+    connect_kwargs = dict(
+        host=host, port=port, user=user, password=password, database=database,
+        connect_timeout=15,
+    )
+    if ssl_ca:
+        ca_file = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+        ca_file.write(ssl_ca)
+        ca_file.close()
+        connect_kwargs["ssl_ca"] = ca_file.name
+        connect_kwargs["ssl_verify_cert"] = True
+
+    conn = mysql.connector.connect(**connect_kwargs)
+    # noinspection SqlNoDataSourceInspection
+    df = pd.read_sql(
+        """
+        SELECT node_id,
+               COUNT(*) AS num_requests_30d,
+               SUM(waste_volume_kg) AS waste_kg_30d
+        FROM historical_requests
+        GROUP BY node_id
+        """,
+        conn,
+    )
+    conn.close()
+    df["num_requests_30d"] = df["num_requests_30d"].astype(int)
+    df["waste_kg_30d"] = df["waste_kg_30d"].astype(float).round(1)
     return df
 
 
@@ -144,7 +196,7 @@ def simulate_demand(locations_df: pd.DataFrame, seed: int = 7) -> pd.DataFrame:
 # TRUCK LOCATION (dynamic, matching the notebook's get_truck_location)
 # --------------------------------------------------------------------------
 def get_truck_location(source: str, locations_df: pd.DataFrame,
-                        host=None, user=None, password=None, database=None):
+                        host=None, user=None, password=None, database=None, port=3306, ssl_ca=None):
     """
     Mirrors the notebook's get_truck_location function so the live app and the
     notebook tell the same story, instead of the app using a hardcoded point.
@@ -157,7 +209,18 @@ def get_truck_location(source: str, locations_df: pd.DataFrame,
     """
     if source == "Live GPS (MySQL truck_telemetry)":
         import mysql.connector
-        conn = mysql.connector.connect(host=host, user=user, password=password, database=database)
+        import tempfile
+
+        connect_kwargs = dict(host=host, port=port, user=user, password=password,
+                               database=database, connect_timeout=15)
+        if ssl_ca:
+            ca_file = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)
+            ca_file.write(ssl_ca)
+            ca_file.close()
+            connect_kwargs["ssl_ca"] = ca_file.name
+            connect_kwargs["ssl_verify_cert"] = True
+
+        conn = mysql.connector.connect(**connect_kwargs)
         cursor = conn.cursor()
         # noinspection SqlNoDataSourceInspection
         cursor.execute("SELECT latitude, longitude FROM truck_telemetry ORDER BY timestamp DESC LIMIT 1")
@@ -297,12 +360,40 @@ def naive_route_length(dist_mat: np.ndarray) -> float:
 # --------------------------------------------------------------------------
 st.sidebar.title("🚛 Control Panel")
 
-data_source = st.sidebar.radio("Data source", ["Demo dataset", "Connect to MySQL"], index=0)
+data_source_options = ["Demo dataset"]
+has_live_db_secrets = "mysql" in st.secrets
+if has_live_db_secrets:
+    data_source_options.append("Live database (real-time)")
+data_source_options.append("Connect to your own MySQL")
 
-mysql_creds: dict[str, Optional[str]] = dict(host=None, user=None, password=None, database=None)
-if data_source == "Connect to MySQL":
+data_source = st.sidebar.radio("Data source", data_source_options, index=0)
+
+mysql_creds: dict[str, Optional[str]] = dict(host=None, port=None, user=None, password=None, database=None)
+mysql_ssl_ca: Optional[str] = None
+
+if data_source == "Live database (real-time)":
+    # Credentials come from Streamlit's Secrets manager, never typed by the visitor
+    # and never stored in the repo -- this is what lets anyone visiting the deployed
+    # app see a genuine live database connection with zero setup on their end.
+    secrets = st.secrets["mysql"]
+    mysql_creds["host"] = secrets["host"]
+    mysql_creds["port"] = int(secrets.get("port", 3306))
+    mysql_creds["user"] = secrets["user"]
+    mysql_creds["password"] = secrets["password"]
+    mysql_creds["database"] = secrets["database"]
+    ssl_ca = secrets.get("ssl_ca")
+    mysql_ssl_ca = ssl_ca
+    try:
+        locations_df = load_mysql_locations(**mysql_creds, ssl_ca=ssl_ca)
+        st.sidebar.success(f"🟢 Live: {len(locations_df)} locations from the real database")
+    except Exception as e:
+        st.sidebar.error(f"Live database unreachable, using demo data instead.\n\n{e}")
+        locations_df = load_demo_locations()
+
+elif data_source == "Connect to your own MySQL":
     st.sidebar.caption("Credentials are only kept in this session's memory.")
     mysql_creds["host"] = st.sidebar.text_input("Host", "localhost")
+    mysql_creds["port"] = st.sidebar.number_input("Port", value=3306, step=1)
     mysql_creds["user"] = st.sidebar.text_input("User", "root")
     mysql_creds["password"] = st.sidebar.text_input("Password", type="password")
     mysql_creds["database"] = st.sidebar.text_input("Database", "zero_waste_logistics")
@@ -318,7 +409,7 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.subheader("Truck location")
 truck_source_options = ["Fixed depot (Civil Lines)", "Simulate (random in service area)"]
-if data_source == "Connect to MySQL":
+if data_source in ("Live database (real-time)", "Connect to your own MySQL"):
     truck_source_options.append("Live GPS (MySQL truck_telemetry)")
 truck_source = st.sidebar.selectbox(
     "How to determine the truck's current position",
@@ -365,14 +456,29 @@ st.caption("Truck location → KD-Tree nearest-neighbor search → Distance matr
 st.markdown("---")
 
 filtered_df = locations_df[locations_df["amenity_type"].isin(amenity_filter)].reset_index(drop=True)
-demand_df = simulate_demand(filtered_df)
+
+using_real_mysql = data_source in ("Live database (real-time)", "Connect to your own MySQL") and mysql_creds["host"]
+demand_df = None
+if using_real_mysql:
+    try:
+        real_demand_df = load_mysql_demand(**mysql_creds, ssl_ca=mysql_ssl_ca)
+        # Only keep rows for the locations actually in view after filtering
+        demand_df = filtered_df[["node_id"]].merge(real_demand_df, on="node_id", how="left")
+        demand_df[["num_requests_30d", "waste_kg_30d"]] = demand_df[["num_requests_30d", "waste_kg_30d"]].fillna(0)
+        st.sidebar.caption("📊 Demand figures pulled from real `historical_requests` table")
+    except Exception as e:
+        st.sidebar.warning(f"Couldn't load real demand history, using simulated demand instead.\n\n{e}")
+        demand_df = None
+
+if demand_df is None:
+    demand_df = simulate_demand(filtered_df)
 
 if "result" not in st.session_state:
     st.session_state.result = None
 
 if run_button or st.session_state.result is None:
     try:
-        truck_location = get_truck_location(truck_source, filtered_df, **mysql_creds)
+        truck_location = get_truck_location(truck_source, filtered_df, ssl_ca=mysql_ssl_ca, **mysql_creds)
     except Exception as e:
         st.warning(f"Couldn't get truck location via '{truck_source}' ({e}). Falling back to fixed depot.")
         truck_location = CITY_CENTER
