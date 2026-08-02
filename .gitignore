@@ -1,6 +1,9 @@
+ca.pem
+dump.sql
 .venv/
 __pycache__/
 *.pyc
 cache/
 .ipynb_checkpoints/
 .streamlit/secrets.toml
+.idea/
